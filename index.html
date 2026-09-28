@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="black">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+<meta name="color-scheme" content="dark light" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="时钟" />
+<meta name="theme-color" content="#000000" />
+<meta name="description" content="低功耗全屏时钟，适合平板长期常亮显示" />
+<title>全屏时钟</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icon-180.png" />
+<style>
+/* ---------- 主题：全部走变量，切换主题不触发重排 ---------- */
+html[data-theme="black"]{
+  --bg:#000000; --fg:#e9e9ea; --meta:#5f646c;
+  --panel-bg:rgba(22,24,28,.96); --panel-fg:#e9eaee; --panel-sub:#8b919b;
+  --line:#31353c; --seg-bg:#171a1f; --seg-on:#313b49; --accent:#5aa9ff;
+}
+html[data-theme="graphite"]{
+  --bg:#0c0e11; --fg:#dfe3e8; --meta:#616870;
+  --panel-bg:rgba(26,29,34,.96); --panel-fg:#e9eaee; --panel-sub:#8b919b;
+  --line:#343941; --seg-bg:#1b1f25; --seg-on:#37404d; --accent:#68b0ff;
+}
+html[data-theme="amber"]{
+  --bg:#000000; --fg:#ff9d2e; --meta:#8a5314;
+  --panel-bg:rgba(24,20,14,.96); --panel-fg:#f3dcc0; --panel-sub:#a8886a;
+  --line:#4a3a24; --seg-bg:#1d1710; --seg-on:#4a3517; --accent:#ffb257;
+}
+html[data-theme="light"]{
+  --bg:#f4f3f0; --fg:#15171b; --meta:#9096a0;
+  --panel-bg:rgba(255,255,255,.97); --panel-fg:#15171b; --panel-sub:#6d737c;
+  --line:#dcdee3; --seg-bg:#ebecf0; --seg-on:#d3dbe8; --accent:#1a6fd4;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; }
+html{ --dim:0; }
+body{
+  background:var(--bg);
+  color:var(--fg);
+  overflow:hidden;
+  overscroll-behavior:none;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-user-select:none; user-select:none;
+  touch-action:manipulation;
+  font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;
+}
+
+/* 舞台：自适应可用区域（含刘海/圆角安全区） */
+#stage{
+  position:fixed; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  padding:max(env(safe-area-inset-top),2vmin) max(env(safe-area-inset-right),2vmin)
+          max(env(safe-area-inset-bottom),2vmin) max(env(safe-area-inset-left),2vmin);
+  z-index:1;
+}
+#shift{ transform:translate(0,0); }
+
+/* 时钟本体：字号由 JS 精确算出，内部全部用 em 跟随 */
+#clock{ font-size:14vmin; line-height:1; text-align:center; }
+#time{
+  font-weight:200;
+  letter-spacing:-0.015em;
+  white-space:nowrap;
+  line-height:1;
+}
+#ss{
+  font-size:0.30em;
+  font-weight:300;
+  margin-left:0.09em;
+  color:var(--meta);
+  letter-spacing:0;
+}
+#meta{
+  margin-top:0.22em;
+  font-size:0.115em;
+  font-weight:400;
+  letter-spacing:0.34em;
+  color:var(--meta);
+  white-space:nowrap;
+  text-indent:0.34em;
+}
+#meta:empty{ display:none; }
+
+/* 变暗遮罩：OLED 上直接减少发光像素，真正降功耗 */
+#dimmer{
+  position:fixed; inset:0; background:#000;
+  opacity:var(--dim); pointer-events:none; z-index:5;
+}
+
+/* ---------- 设置面板 ---------- */
+#panel{
+  position:fixed; z-index:20;
+  left:50%; bottom:max(18px,env(safe-area-inset-bottom));
+  transform:translate(-50%,140%);
+  width:min(94vw,560px); max-height:84vh; overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  background:var(--panel-bg); color:var(--panel-fg);
+  border:1px solid var(--line); border-radius:18px;
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+  box-shadow:0 18px 50px rgba(0,0,0,.45);
+  transition:transform .22s ease, opacity .22s ease;
+  opacity:0; visibility:hidden;
+}
+#panel.on{ transform:translate(-50%,0); opacity:1; visibility:visible; }
+.p-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.p-title{ font-size:15px; font-weight:600; letter-spacing:.02em; }
+.p-x{
+  border:0; background:transparent; color:var(--panel-sub);
+  font-size:16px; line-height:1; padding:8px 6px; cursor:pointer;
+}
+.row{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:6px 0; border-top:1px solid var(--line);
+}
+.row:first-of-type{ border-top:0; }
+.lab{ font-size:14px; letter-spacing:.02em; }
+.hint{ font-size:12px; color:var(--panel-sub); margin:9px 0 0; line-height:1.65; }
+.seg{ display:flex; gap:4px; background:var(--seg-bg); border-radius:11px; padding:3px; flex-wrap:wrap; }
+.seg button{
+  border:0; background:transparent; color:var(--panel-sub);
+  font-size:13px; font-family:inherit; letter-spacing:.02em;
+  padding:6px 11px; border-radius:9px; cursor:pointer; white-space:nowrap;
+}
+.seg button.on{ background:var(--seg-on); color:var(--panel-fg); font-weight:600; }
+#actRow{ display:flex; gap:8px; margin-top:12px; }
+.btn{
+  flex:1; border:1px solid var(--line); background:var(--seg-bg); color:var(--panel-fg);
+  font-family:inherit; font-size:13.5px; padding:11px 8px; border-radius:11px; cursor:pointer;
+}
+.btn.primary{ background:var(--accent); border-color:transparent; color:#fff; font-weight:600; }
+
+#toast{
+  position:fixed; z-index:30; left:50%; transform:translateX(-50%);
+  bottom:calc(50% - 0.8em); max-width:86vw; text-align:center;
+  background:rgba(20,22,26,.94); color:#f2f4f8; border:1px solid rgba(255,255,255,.14);
+  font-size:14px; line-height:1.6; padding:12px 18px; border-radius:13px;
+  opacity:0; visibility:hidden; transition:opacity .2s ease, visibility .2s;
+}
+#toast.on{ opacity:1; visibility:visible; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="shift">
+    <div id="clock">
+      <div id="time"><span id="hm">--:--</span><span id="ss"></span></div>
+      <div id="meta"></div>
+    </div>
+  </div>
+</div>
+
+<div id="dimmer"></div>
+
+<div id="panel" role="dialog" aria-label="时钟设置">
+  <div class="p-head">
+    <span class="p-title">时钟设置</span>
+    <button class="p-x" id="pClose" aria-label="关闭">✕</button>
+  </div>
+
+  <div class="row"><span class="lab">显示秒</span>
+    <div class="seg" data-key="showSeconds" data-type="bool"><button data-v="0">关</button><button data-v="1">开</button></div>
+  </div>
+  <div class="row"><span class="lab">24 小时制</span>
+    <div class="seg" data-key="h24" data-type="bool"><button data-v="1">24 时</button><button data-v="0">12 时</button></div>
+  </div>
+  <div class="row"><span class="lab">显示日期</span>
+    <div class="seg" data-key="showDate" data-type="bool"><button data-v="0">关</button><button data-v="1">开</button></div>
+  </div>
+  <div class="row"><span class="lab">主题</span>
+    <div class="seg" data-key="theme" data-type="str">
+      <button data-v="black">纯黑</button><button data-v="graphite">深灰</button>
+      <button data-v="amber">琥珀</button><button data-v="light">浅色</button>
+    </div>
+  </div>
+  <div class="row"><span class="lab">变暗</span>
+    <div class="seg" data-key="dim" data-type="num">
+      <button data-v="0">无</button><button data-v="1">轻</button>
+      <button data-v="2">中</button><button data-v="3">强</button>
+    </div>
+  </div>
+  <div class="row"><span class="lab">夜间自动变暗</span>
+    <div class="seg" data-key="nightDim" data-type="bool"><button data-v="0">关</button><button data-v="1">开</button></div>
+  </div>
+  <div class="row"><span class="lab">防烧屏微移</span>
+    <div class="seg" data-key="burnIn" data-type="bool"><button data-v="0">关</button><button data-v="1">开</button></div>
+  </div>
+  <div class="row"><span class="lab">屏幕常亮</span>
+    <div class="seg" data-key="keepAwake" data-type="bool"><button data-v="0">关</button><button data-v="1">开</button></div>
+  </div>
+
+  <div id="actRow">
+    <button class="btn primary" id="fsBtn">全屏</button>
+    <button class="btn" id="helpBtn">安装到平板</button>
+  </div>
+
+  <p class="hint" id="wlStatus">屏幕常亮：检测中…</p>
+  <p class="hint">省电要点：纯黑主题 + 变暗「中/强」+ 不显示秒 + 降低系统亮度。OLED 屏黑色像素不发光，变暗是真实省电；夜间会自动加暗一档。</p>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+  'use strict';
+
+  var $ = function(s){ return document.querySelector(s); };
+  var hmEl = $('#hm'), ssEl = $('#ss'), metaEl = $('#meta');
+  var clockEl = $('#clock'), shiftEl = $('#shift'), stageEl = $('#stage');
+  var panelEl = $('#panel'), toastEl = $('#toast'), wlEl = $('#wlStatus');
+
+  var KEY = 'tablet-clock-v1';
+  var DEFAULTS = {
+    showSeconds:false, h24:true, showDate:true,
+    theme:'black', dim:1, nightDim:true, burnIn:true, keepAwake:true
+  };
+  var DIM_ALPHA = [0, 0.25, 0.45, 0.62];
+  var WEEK = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
+
+  // 运行时统计：用来证明"没有多余重绘"
+  var stats = { ticks:0, writes:0, schedules:0 };
+
+  var cfg = load();
+  var timer = null;
+  var burnTimer = null;
+  var shiftIdx = 0;
+  var idleTimer = null;
+  var toastTimer = null;
+  var wl = null;
+  var overrideNow = null;
+  var resizeTimer = null;
+
+  var SHIFTS = [[0,0],[2,0],[2,2],[0,2],[-2,2],[-2,0],[-2,-2],[0,-2]];
+
+  /* ---------------- 配置持久化 ---------------- */
+  function load(){
+    var out = {}, k;
+    for (k in DEFAULTS) { if (Object.prototype.hasOwnProperty.call(DEFAULTS, k)) out[k] = DEFAULTS[k]; }
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (raw) {
+        var saved = JSON.parse(raw);
+        for (k in out) {
+          if (Object.prototype.hasOwnProperty.call(saved, k) && typeof saved[k] === typeof out[k]) out[k] = saved[k];
+        }
+      }
+    } catch (e) { /* 隐私模式/无存储时静默用默认值 */ }
+    return out;
+  }
+  function save(){
+    try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) {}
+  }
+
+  /* ---------------- 时间渲染 ---------------- */
+  function nowMs(){ return overrideNow === null ? Date.now() : overrideNow; }
+  function pad2(n){ return n < 10 ? '0' + n : '' + n; }
+
+  // 只在文本真的变化时才碰 DOM —— 这是低功耗的核心
+  function setText(el, s){
+    if (el.textContent !== s) { el.textContent = s; stats.writes++; }
+  }
+
+  function render(){
+    var now = new Date(nowMs());
+    var h = now.getHours();
+    var ampm = '';
+    if (cfg.h24) {
+      // 24 小时制：直接用 getHours()
+    } else {
+      ampm = h < 12 ? '上午' : '下午';
+      h = h % 12; if (h === 0) h = 12;
+    }
+    if (cfg.showSeconds) {
+      setText(hmEl, pad2(h) + ':' + pad2(now.getMinutes()));
+      setText(ssEl, pad2(now.getSeconds()));
+    } else {
+      setText(hmEl, pad2(h) + ':' + pad2(now.getMinutes()));
+      setText(ssEl, '');
+    }
+    var meta = '';
+    if (cfg.showDate) {
+      meta = now.getFullYear() + '年' + (now.getMonth() + 1) + '月' + now.getDate() + '日  ' + WEEK[now.getDay()];
+      if (ampm) meta += '  ' + ampm;
+    } else if (ampm) {
+      meta = ampm;
+    }
+    setText(metaEl, meta);
+  }
+
+  /* ---------------- 定时器：对齐到下一次变化，绝不空转 ---------------- */
+  function clearTimer(){
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+  }
+  function schedule(){
+    clearTimer();
+    stats.schedules++;
+    if (document.hidden) return;
+    var period = cfg.showSeconds ? 1000 : 60000;
+    var t = nowMs();
+    var next = (Math.floor(t / period) + 1) * period + 25; // 跨过边界 25ms 再刷新
+    timer = setTimeout(tick, Math.max(16, next - t));
+  }
+  function tick(){
+    // 这里必须先真正取消待触发的定时器，不能简单地 timer = null。
+    // 否则被直接调用的 tick（前台恢复、调试钩子）会丢掉句柄 → 定时器泄漏，
+    // 多个残留定时器会在同一分钟边界一起爆发。clearTimeout 对已触发的 id 是空操作。
+    clearTimer();
+    stats.ticks++;
+    render();
+    schedule();
+  }
+  function start(){
+    tick();
+  }
+
+  /* ---------------- 自适应字号 ---------------- */
+  function fit(){
+    var W = document.documentElement.clientWidth;
+    var H = document.documentElement.clientHeight;
+    clockEl.style.fontSize = '100px';
+    var r = clockEl.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    var k = Math.min((W * 0.90) / r.width, (H * 0.84) / r.height);
+    clockEl.style.fontSize = Math.max(20, Math.round(100 * k)) + 'px';
+  }
+  function onResize(){
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function(){ fit(); render(); }, 120);
+  }
+
+  /* ---------------- 防烧屏 ---------------- */
+  function startBurnIn(){
+    if (burnTimer) { clearInterval(burnTimer); burnTimer = null; }
+    if (!cfg.burnIn) { shiftEl.style.transform = 'translate(0,0)'; return; }
+    burnTimer = setInterval(function(){
+      if (document.hidden) return;                 // 息屏后不浪费唤醒
+      shiftIdx = (shiftIdx + 1) % SHIFTS.length;
+      shiftEl.style.transform = 'translate(' + SHIFTS[shiftIdx][0] + 'px,' + SHIFTS[shiftIdx][1] + 'px)';
+    }, 240000); // 每 4 分钟挪 2px，几乎不产生额外功耗
+  }
+
+  /* ---------------- 屏幕常亮 ---------------- */
+  function setWl(txt){ wlEl.textContent = '屏幕常亮：' + txt; }
+  function acquireWakeLock(){
+    if (!cfg.keepAwake) { setWl('已关闭'); return; }
+    if (!('wakeLock' in navigator)) {
+      setWl('当前浏览器不支持（需 Safari 16.4+ / Chrome 84+ 且为 https 或 localhost）');
+      return;
+    }
+    if (document.visibilityState !== 'visible') return;
+    if (wl && !wl.released) { setWl('已开启'); return; }
+    navigator.wakeLock.request('screen').then(function(sentinel){
+      wl = sentinel;
+      setWl('已开启');
+      sentinel.addEventListener('release', function(){
+        wl = null;
+        if (cfg.keepAwake && document.visibilityState === 'visible') {
+          setTimeout(acquireWakeLock, 800);
+        } else if (cfg.keepAwake) {
+          setWl('页面不在前台，已暂停');
+        }
+      });
+    }).catch(function(err){
+      setWl('开启失败（' + ((err && err.name) || '未知错误') + '），请确认为 https 或 localhost 且页面处于可见状态');
+    });
+  }
+  function releaseWakeLock(){
+    setWl('已关闭');
+    if (!wl) return;
+    var old = wl; wl = null;
+    try {
+      var p = old.release();                 // 必须吞掉 rejection，否则会进 unhandledrejection
+      if (p && p.catch) p.catch(function(){});
+    } catch (e) {}
+  }
+
+  /* ---------------- 主题 / 变暗 ---------------- */
+  function isNight(){ var h = new Date(nowMs()).getHours(); return h >= 22 || h < 7; }
+  function apply(){
+    document.documentElement.dataset.theme = cfg.theme;
+    var lv = cfg.dim;
+    if (cfg.nightDim && isNight()) lv = Math.max(lv, 2);
+    document.documentElement.dataset.night = (cfg.nightDim && isNight()) ? '1' : '0';
+    document.documentElement.style.setProperty('--dim', String(DIM_ALPHA[lv] || 0));
+    syncSegs();
+    render();   // 必须先写入真实内容，fit() 量到的才是真实文字尺寸
+    fit();
+    schedule();
+    startBurnIn();
+    if (cfg.keepAwake) acquireWakeLock(); else releaseWakeLock();
+  }
+
+  /* ---------------- 面板交互 ---------------- */
+  function syncSegs(){
+    var segs = document.querySelectorAll('.seg');
+    for (var i = 0; i < segs.length; i++) {
+      var seg = segs[i], key = seg.getAttribute('data-key');
+      // 布尔键在 DOM 里用 "1"/"0" 表示，不能直接 String(true)
+      var v = seg.getAttribute('data-type') === 'bool'
+        ? (cfg[key] ? '1' : '0')
+        : String(cfg[key]);
+      var bs = seg.children;
+      for (var j = 0; j < bs.length; j++) {
+        if (bs[j].getAttribute('data-v') === v) bs[j].classList.add('on');
+        else bs[j].classList.remove('on');
+      }
+    }
+  }
+  function openPanel(){ panelEl.classList.add('on'); resetIdle(); }
+  function closePanel(){ panelEl.classList.remove('on'); }
+  function resetIdle(){
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(function(){ closePanel(); }, 15000);
+  }
+  function toast(msg, ms){
+    toastEl.textContent = msg;
+    toastEl.classList.add('on');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.classList.remove('on'); }, ms || 3200);
+  }
+
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    var segBtn = t.closest ? t.closest('.seg button') : null;
+    if (segBtn) {
+      var seg = segBtn.parentNode;
+      var key = seg.getAttribute('data-key');
+      var type = seg.getAttribute('data-type');
+      var raw = segBtn.getAttribute('data-v');
+      if (type === 'bool') cfg[key] = (raw === '1');
+      else if (type === 'num') cfg[key] = Number(raw);
+      else cfg[key] = raw;
+      save(); apply(); resetIdle();
+      return;
+    }
+    if (t.closest && (t.closest('#panel') || t.closest('#toast'))) { resetIdle(); return; }
+    // 点击时钟区域：开关面板
+    if (panelEl.classList.contains('on')) closePanel(); else openPanel();
+  });
+
+  $('#pClose').addEventListener('click', function(){ closePanel(); });
+
+  $('#fsBtn').addEventListener('click', function(){
+    var el = document.documentElement;
+    var isFs = document.fullscreenElement || document.webkitFullscreenElement;
+    if (isFs) {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+      return;
+    }
+    var req = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen;
+    if (!req) {
+      toast('此浏览器不支持网页全屏（iPad 上的 Safari 即如此）。请用 Safari 打开后点「分享 → 添加到主屏幕」，从主屏幕图标启动即为全屏。', 6000);
+      return;
+    }
+    try {
+      var p = req.call(el);
+      if (p && p.catch) p.catch(function(){ toast('全屏被系统拒绝，请重试或使用「添加到主屏幕」方式。', 4500); });
+    } catch (err) {
+      toast('全屏失败：' + ((err && err.message) || '未知错误'), 4500);
+    }
+  });
+
+  $('#helpBtn').addEventListener('click', function(){
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    toast(isIOS
+      ? '① 用 Safari 打开本页 → ② 分享按钮 → ③「添加到主屏幕」→ ④ 从主屏幕图标启动（全屏无地址栏）→ ⑤ 设置里打开「屏幕常亮」'
+      : '① 用 Chrome 打开本页 → ② 右上角菜单 → ③「安装应用 / 添加到主屏幕」→ ④ 从图标启动即为全屏', 7000);
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'f' || e.key === 'F') { $('#fsBtn').click(); }
+    else if (e.key === 's' || e.key === 'S') {
+      cfg.showSeconds = !cfg.showSeconds; save(); apply();
+    } else if (e.key === 'Escape') { closePanel(); }
+    else if (e.key === ' ') { e.preventDefault(); if (panelEl.classList.contains('on')) closePanel(); else openPanel(); }
+  });
+
+  /* ---------------- 生命周期 ---------------- */
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+    } else {
+      // 回到前台：立刻校准时间、重排定时器，并补算字号
+      // （页面若是在后台标签页里加载的，首次 fit() 会因视口为 0 而跳过）
+      start();
+      fit();
+      if (cfg.keepAwake) acquireWakeLock();
+    }
+  });
+  window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', onResize);
+  window.addEventListener('pageshow', function(){ start(); });
+
+  // 长按不选中、双击不缩放（部分旧内核）
+  document.addEventListener('gesturestart', function(e){ e.preventDefault(); });
+
+  /* ---------------- 启动 ---------------- */
+  apply();
+  start();
+
+  // 测试/调试钩子（不影响运行）
+  window.__clock = {
+    stats: stats, cfg: cfg, apply: apply, fit: fit, render: render,
+    resetStats: function(){ stats.ticks = 0; stats.writes = 0; stats.schedules = 0; },
+    setNow: function(ms){ overrideNow = (ms === null || ms === undefined) ? null : ms; tick(); },
+    openPanel: openPanel, closePanel: closePanel
+  };
+})();
+</script>
+</body>
+</html>
